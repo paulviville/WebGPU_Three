@@ -4,3 +4,5 @@ import { DisplayManager } from './DisplayManager.js';
 
 
 const display = new DisplayManager();
+await display.initializeWebGPURenderer();
+display.start()

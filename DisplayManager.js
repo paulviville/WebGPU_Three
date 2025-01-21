@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import Stats from 'three/addons/libs/stats.module.js';
+import { WebGPURenderer } from './WebGPURenderer.js';
 
 
 export class DisplayManager {
@@ -13,7 +14,9 @@ export class DisplayManager {
 	#webGPUTexture0;
 	#webGPUTexture1;
 	#controler;
-	#stats; 
+	#stats;
+	#webGPURenderer0;
+	#webGPURenderer1;
 
 
 	constructor() {
@@ -24,14 +27,18 @@ export class DisplayManager {
 		this.#renderer = new THREE.WebGLRenderer();
 
 		this.#renderer.setSize(window.innerWidth, window.innerHeight);
-		document.body.appendChild(this.#renderer.domElement);
+		const canvas = this.#renderer.domElement
+		document.body.appendChild(canvas);
 		console.log(this.#renderer)
 
 		this.#scene = new THREE.Scene();
 		this.#scene.background = new THREE.Color(0x555555);
 
 		this.#camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-		this.#controler = new OrbitControls(this.#camera, this.#render.domElement);
+		this.#camera.position.set( 1, 1, 3 );
+
+		this.#controler = new OrbitControls(this.#camera, canvas);
+		console.log(this.#controler)
 		// this.#camera.layers.enable(0);
 		// this.#camera.layers.enable(1);
 		window.addEventListener('resize', () => {
@@ -45,11 +52,11 @@ export class DisplayManager {
 		this.#webGPUTexture0 = new THREE.CanvasTexture(this.#webGPUCanvas0);
 		this.#webGPUTexture1 = new THREE.CanvasTexture(this.#webGPUCanvas1);
 
-		this.#drawCanvas(this.#webGPUCanvas0, "0");
+		// this.#drawCanvas(this.#webGPUCanvas0, "0");
 
 		this.#initializeViewQuad();
-
-		requestAnimationFrame(this.#animationLoop.bind(this))
+		// this.initializeWebGPURenderer();
+		// requestAnimationFrame(this.#animationLoop.bind(this))
 	}
 
 	/// placeholder for webgpu render
@@ -102,10 +109,26 @@ export class DisplayManager {
 		this.#scene.add(this.#displayQuad);
 	}
 
+	async initializeWebGPURenderer() {
+		console.log(this.#webGPUCanvas0.width)
+		this.#webGPUCanvas0.width = window.innerWidth;
+		this.#webGPUCanvas0.height = window.innerHeight;
+		this.#webGPURenderer0 = await WebGPURenderer.create(this.#webGPUCanvas0);
+		console.log(this.#webGPURenderer0)
+	}
 
 	#animationLoop(t) {
+		this.#camera.updateMatrixWorld();
+		const mvp = this.#camera.projectionMatrix.clone().multiply(this.#camera.matrixWorldInverse);
+		const MVP = new Float32Array(mvp.toArray());
+		const INV_MVP = new Float32Array(mvp.invert().toArray());
+
+
+
+
 		// console.log(t);
-		this.#drawCanvas(this.#webGPUCanvas0, ""+t)
+		// this.#drawCanvas(this.#webGPUCanvas0, ""+t)
+		this.#webGPURenderer0.render(MVP);
 		this.#webGPUTexture0.needsUpdate = true;
 		this.#render();
 		this.#stats.update();
@@ -115,5 +138,9 @@ export class DisplayManager {
 	#render() {
 		// console.log("render", this)
 		this.#renderer.render(this.#scene, this.#camera);
+	}
+
+	start() {
+		requestAnimationFrame(this.#animationLoop.bind(this))
 	}
 }
