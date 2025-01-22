@@ -3,6 +3,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DisplayManager } from './DisplayManager.js';
 
 
+
+let activeVR = false;
+
+
+
 const display = new DisplayManager();
-await display.initializeWebGPURenderer();
+await display.initializeWebGPURenderers();
 display.start()
