@@ -54,16 +54,16 @@ const cubeVertexArray = new Float32Array([
 
 
 
-export class WebGPURenderer {
+export class WebGPUStereoRenderer {
 	#canvas;
-	
-    constructor(gpu, adapter, device, context, canvas) {
-		this.#canvas = canvas;
-        this.gpu = gpu;
-        this.adapter = adapter;
-        this.device = device;
-        this.context = context;
+	mono = true;
 
+	constructor(gpu, adapter, device, context, canvas) {
+		this.#canvas = canvas;
+		this.gpu = gpu;
+		this.adapter = adapter;
+		this.device = device;
+		this.context = context;
 	}
 
 	static async create( canvas ) {
@@ -82,14 +82,13 @@ export class WebGPURenderer {
 		
 		const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 		const context = canvas.getContext("webgpu");
-		console.log(gpu, adapter, device, context, canvas)
 		context.configure({
 			device: device,
 			format: canvasFormat,
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING,
 		});
 
-		const renderer = new WebGPURenderer(gpu, adapter, device, context, canvas);
+		const renderer = new WebGPUStereoRenderer(gpu, adapter, device, context, canvas);
 
 		await renderer.#initializeResources();
 		await renderer.#intializePipelines();
@@ -97,35 +96,42 @@ export class WebGPURenderer {
 		return renderer;
 	}
 
-	render( mvpMatrix ) {
-		// console.log("webgpu rendering")
+	setUniforms( mvpMatrixLeft, mvpMatrixRight ) {
+		const floatView = new Float32Array(this.uniformBufferArray);
+		floatView.set(mvpMatrixLeft, 0);
+		floatView.set(mvpMatrixRight, this.uniformBufferOffset / 4);
+
 		this.device.queue.writeBuffer(
 			this.uniformBuffer,
 			0,
-			mvpMatrix,
+			this.uniformBufferArray,
 		);
-		
+	}
+
+	render( mvpMatrixLeft, mvpMatrixRight ) {
+		this.setUniforms(mvpMatrixLeft, mvpMatrixRight);
 
 		const commandEncoder = this.device.createCommandEncoder();
-        this.colorAttachment.view = this.context.getCurrentTexture().createView();
+		this.colorAttachment.view = this.context.getCurrentTexture().createView();
 		const renderPass = commandEncoder.beginRenderPass({
-            colorAttachments: [this.colorAttachment],
-            depthStencilAttachment: this.depthStencilAttachment,
-        });
-        renderPass.setPipeline(this.pipeline);
-        renderPass.setBindGroup(0, this.bindGroup);
-        renderPass.setVertexBuffer(0, this.vertexBuffer);
+			colorAttachments: [this.colorAttachment],
+			depthStencilAttachment: this.depthStencilAttachment,
+		});
 
-		// renderPass.setScissorRect(0, 0, this.#canvas.width / 2, this.#canvas.height)
-		renderPass.setViewport(this.#canvas.width / 2, 0, this.#canvas.width / 2, this.#canvas.height, 0, 1)
-		// renderPass.setViewport(0, 0, this.#canvas.width / 2, this.#canvas.height, 0, 1)
+		renderPass.setPipeline(this.pipeline);
+		renderPass.setVertexBuffer(0, this.vertexBuffer);
 
-		renderPass.draw(cubeVertexCount);
+		renderPass.setBindGroup(0, this.bindGroup, [0]);
 		renderPass.setViewport(0, 0, this.#canvas.width / 2, this.#canvas.height, 0, 1)
 		renderPass.draw(cubeVertexCount);
-        renderPass.end();
-		this.device.queue.submit([commandEncoder.finish()]);
 
+		if(!this.mono) {
+			renderPass.setBindGroup(0, this.bindGroup, [256]);
+			renderPass.setViewport(this.#canvas.width / 2, 0, this.#canvas.width / 2, this.#canvas.height, 0, 1)
+			renderPass.draw(cubeVertexCount);
+		}
+		renderPass.end();
+		this.device.queue.submit([commandEncoder.finish()]);
 	}
 
 	async #initializeResources( ) {
@@ -140,40 +146,51 @@ export class WebGPURenderer {
 		this.vertexBuffer.unmap();
 		
 
-	 	this.depthTexture = this.device.createTexture({
+		this.depthTexture = this.device.createTexture({
 			size: [this.#canvas.width, this.#canvas.height],
 			format: 'depth24plus',
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 
-		const uniformBufferSize = 4 * 16; // 4x4 matrix
+
+		const matrixSize = 64;
+		const alignment = this.device.limits.minUniformBufferOffsetAlignment;
+		const alignedMatrixSize = alignment + matrixSize; /// matrix(64) + padding(256 - 64) + matrix(64) 
+
+		const uniformBufferSize = alignment *  2; // 4x4 matrix * 2
 		this.uniformBuffer = this.device.createBuffer({
 		  size: uniformBufferSize,
 		  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
+
+		this.uniformBufferOffset = alignment;
+		this.uniformBufferArray = new ArrayBuffer(alignedMatrixSize);
 	}
 
 	async #intializePipelines() {
 		console.log("initializing pipelines")
 		const code = await new Loader().loadText("./shaders/cube.wgsl");
-        const shaderModule = this.device.createShaderModule({code});
+		const shaderModule = this.device.createShaderModule({code});
 
 		const bindGroupLayout = this.device.createBindGroupLayout({
-            entries: [
-                // uniform buffer
-                {
-                    binding: 0,
-                    visibility: GPUShaderStage.VERTEX,
-                    buffer: {},
-                },
-            ]
-        });
+			entries: [
+				// uniform buffer
+				{
+					binding: 0,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: {
+						type: 'uniform',
+						hasDynamicOffset: true,
+					},
+				},
+			]
+		});
 
 		const pipelineLayout = this.device.createPipelineLayout({
-            bindGroupLayouts: [
-                bindGroupLayout, // @group 0
-            ]
-        });
+			bindGroupLayouts: [
+				bindGroupLayout, // @group 0
+			]
+		});
 
 		this.pipeline = this.device.createRenderPipeline({
 			layout: pipelineLayout,
@@ -218,26 +235,26 @@ export class WebGPURenderer {
 		});
 
 		this.bindGroup = this.device.createBindGroup({
-            layout: bindGroupLayout,
-            entries: [
-                {binding: 0, resource: {buffer: this.uniformBuffer}},
-            ]
-        });
+			layout: bindGroupLayout,
+			entries: [
+				{binding: 0, resource: {buffer: this.uniformBuffer, size: 256}},
+			]
+		});
 
 
 		this.colorAttachment = {
-            view: null,
-            clearValue: {r: 0.3, g: 0.3, b: 0.3, a: 1},
-            loadOp: 'clear',
-            loadValue: {r: 0.3, g: 0.3, b: 0.3, a: 1},
-            storeOp: 'store'
-        };
+			view: null,
+			clearValue: {r: 0.3, g: 0.3, b: 0.3, a: 1},
+			loadOp: 'clear',
+			loadValue: {r: 0.3, g: 0.3, b: 0.3, a: 1},
+			storeOp: 'store'
+		};
 
 		this.depthStencilAttachment = {
-            view: this.depthTexture.createView(),
-            depthClearValue: 1.0,
-            depthLoadOp: 'clear',
-            depthStoreOp: 'discard',
-        };
+			view: this.depthTexture.createView(),
+			depthClearValue: 1.0,
+			depthLoadOp: 'clear',
+			depthStoreOp: 'discard',
+		};
 	}
 }	

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import Stats from 'three/addons/libs/stats.module.js';
+import { WebGPUStereoRenderer } from './WebGPUStereoRenderer.js';
 import { WebGPURenderer } from './WebGPURenderer.js';
 
 import { XRButton } from 'three/addons/webxr/XRButton.js';
@@ -13,17 +14,12 @@ export class DisplayManager {
 	#scene;
 	#camera;
 	#renderer;
-	#displayQuad0;
-	#displayQuad1;
-	#webGPUCanvas0;
-	#webGPUCanvas1;
-	#webGPUTexture0;
-	#webGPUTexture1;
+	#displayQuadL;
+	#displayQuadR;
+	#webGPUStereoCanvas;
+	#webGPUStereoTexture;
 	#controler;
 	#stats;
-	#webGPURenderer0;
-	#webGPURenderer1;
-
 	activeVR = false;
 
 	constructor() {
@@ -39,7 +35,6 @@ export class DisplayManager {
 		this.#renderer.toneMapping = THREE.ACESFilmicToneMapping;
 		this.#renderer.toneMappingExposure = 1;
 
-		this.#renderer.setSize(window.innerWidth, window.innerHeight);
 		const canvas = this.#renderer.domElement
 		document.body.appendChild(canvas);
 		console.log(this.#renderer)
@@ -49,12 +44,14 @@ export class DisplayManager {
 
 		this.#renderer.xr.addEventListener('sessionstart', () => {
 			console.log('VR session started');
-			this.activeVR = true; // Enable controller input when VR is active
+			this.webGPUStereoRenderer.mono = false;
+			this.activeVR = true;
 		});
 
 		this.#renderer.xr.addEventListener('sessionend', () => {
 			console.log('VR session ended');
-			this.activeVR = false; // Disable controller input when VR is inactive
+			this.webGPUStereoRenderer.mono = true;
+			this.activeVR = false;
 		});
 
 
@@ -63,148 +60,103 @@ export class DisplayManager {
 
 		this.#camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 		this.#camera.position.set( 1, 1, 3 );
+		this.#camera.layers.enable(1);
 
 		this.#controler = new OrbitControls(this.#camera, canvas);
-		console.log(this.#controler)
-		// this.#camera.layers.enable(0);
-		this.#camera.layers.enable(1);
-		// window.addEventListener('resize', () => {
-		// 	this.#renderer.setSize(window.innerWidth, window.innerHeight);
-		// 	this.#camera.aspect = window.innerWidth / window.innerHeight;
-		// 	this.#camera.updateProjectionMatrix();
-		// });
 
-		this.#webGPUCanvas0 = document.getElementById('webgpuCanvas0');
-		this.#webGPUCanvas1 = document.getElementById('webgpuCanvas1');
-		this.#webGPUTexture0 = new THREE.CanvasTexture(this.#webGPUCanvas0);
-		this.#webGPUTexture1 = new THREE.CanvasTexture(this.#webGPUCanvas1);
-
+		this.#webGPUStereoCanvas = document.getElementById('webgpuCanvas');
+		this.#webGPUStereoTexture = new THREE.CanvasTexture(this.#webGPUStereoCanvas);
 
 		this.#initializeViewQuad();
-		// this.initializeWebGPURenderer();
-		// requestAnimationFrame(this.#animationLoop.bind(this))
 	}
 
 	#initializeViewQuad() {
-		const geometry = new THREE.PlaneGeometry(2, 2);
+		const geometry0 = new THREE.PlaneGeometry(2, 2);
+		const uvs0 = geometry0.attributes.uv.array;
+		uvs0[2] = 0.5;
+		uvs0[6] = 0.5;
+
+		const geometry1 = new THREE.PlaneGeometry(2, 2);
+		const uvs1 = geometry1.attributes.uv.array;
+		uvs1[0] = 0.5;
+		uvs1[4] = 0.5;
+
 		const material = new THREE.ShaderMaterial({
 			uniforms: {
-			  u_texture: { value: this.#webGPUTexture0 },
-			  u_cameraPosition: { value: new THREE.Vector3() },
+			  u_texture: { value: this.#webGPUStereoTexture },
 			},
 			vertexShader: `
-			  varying vec2 vUv;
-			  void main() {
-				vUv = uv;
-				gl_Position = vec4(position, 1.0);
-			  }
+				varying vec2 vUv;
+				void main() {
+					vUv = uv;
+					gl_Position = vec4(position, 1.0);
+				}
 			`,
 			fragmentShader: `
-    			uniform vec3 u_cameraPosition;
 				uniform sampler2D u_texture;
 				varying vec2 vUv;
 				void main() {
 					vec4 texColor = texture2D(u_texture, vUv);
 					gl_FragColor = texColor;
-			 	 }
+			 	}
 			`,
-		  });
+		});
 
-		  const material2 = new THREE.ShaderMaterial({
-			uniforms: {
-			  u_texture: { value: this.#webGPUTexture1 },
-			  u_cameraPosition: { value: new THREE.Vector3() },
-			},
-			vertexShader: `
-			  varying vec2 vUv;
-			  void main() {
-				vUv = uv;
-				gl_Position = vec4(position, 1.0);
-			  }
-			`,
-			fragmentShader: `
-    			uniform vec3 u_cameraPosition;
-				uniform sampler2D u_texture;
-				varying vec2 vUv;
-				void main() {
-					vec4 texColor = texture2D(u_texture, vUv);
-					gl_FragColor = texColor;
-			 	 }
-			`,
-		  });
+		this.#displayQuadL = new THREE.Mesh(geometry0, material);
+		this.#displayQuadL.layers.disable(0);
+		this.#displayQuadL.layers.enable(1);
 
-		this.#displayQuad0 = new THREE.Mesh(geometry, material);
-		this.#displayQuad0.layers.disable(0);
-		this.#displayQuad0.layers.enable(1);
+		this.#displayQuadR = new THREE.Mesh(geometry1, material);
+		this.#displayQuadR.layers.disable(0);
+		this.#displayQuadR.layers.enable(2);
 
-		this.#displayQuad1 = new THREE.Mesh(geometry, material2);
-		this.#displayQuad1.layers.disable(0);
-		this.#displayQuad1.layers.enable(2);
-		// console.log(this.#displayQuad0.layers)
-		this.#scene.add(this.#displayQuad0);
-		this.#scene.add(this.#displayQuad1);
+		this.#scene.add(this.#displayQuadL);
+		this.#scene.add(this.#displayQuadR);
 	}
 
 	async initializeWebGPURenderers() {
-		this.#webGPUCanvas0.width = window.innerWidth;
-		this.#webGPUCanvas0.height = window.innerHeight;
-		this.#webGPURenderer0 = await WebGPURenderer.create(this.#webGPUCanvas0);
+		this.#webGPUStereoCanvas.width = 1680 * 2;
+		this.#webGPUStereoCanvas.height = 1760;
+		this.webGPUStereoRenderer = await WebGPUStereoRenderer.create(this.#webGPUStereoCanvas);
+	}
 
-		this.#webGPUCanvas1.width = window.innerWidth;
-		this.#webGPUCanvas1.height = window.innerHeight;
-		this.#webGPURenderer1 = await WebGPURenderer.create(this.#webGPUCanvas1);
+	model = new THREE.Matrix4();
+	mvp = new THREE.Matrix4();
+	cameraMVP= {
+		L: new Float32Array(16),
+		R: new Float32Array(16),
 	}
 
 	#animationLoop(t) {
-
+		this.model.makeRotationAxis(new THREE.Vector3(0, 0, 1).normalize(), t /2000);
+		
 		if(!this.activeVR) {
-			this.#camera.updateMatrixWorld();
-			const mvp = this.#camera.projectionMatrix.clone().multiply(this.#camera.matrixWorldInverse);
-			const MVP = new Float32Array(mvp.toArray());
-			const INV_MVP = new Float32Array(mvp.invert().toArray());
 
-
-
-
-			this.#webGPURenderer0.render(MVP);
-			this.#webGPUTexture0.needsUpdate = true;
-			// this.#webGPURenderer1.render(MVP);
-			// this.#webGPUTexture1.needsUpdate = true;
-			this.#render();
+			this.mvp.copy(this.#camera.projectionMatrix).multiply(this.#camera.matrixWorldInverse).multiply(this.model);
+			this.mvp.toArray(this.cameraMVP.L);
 		}
 
 		else {
 			const cameras = this.#renderer.xr.getCamera().cameras
-			// console.log(cameras)
-			cameras[0].updateMatrixWorld();
-			cameras[1].updateMatrixWorld();
-			let mvp = cameras[0].projectionMatrix.clone().multiply(cameras[0].matrixWorldInverse);
-			let MVP = new Float32Array(mvp.toArray());
-			let INV_MVP = new Float32Array(mvp.invert().toArray());
 
-			this.#webGPURenderer0.render(MVP);
-			this.#webGPUTexture0.needsUpdate = true;
-
-			mvp = cameras[1].projectionMatrix.clone().multiply(cameras[1].matrixWorldInverse);
-			MVP = new Float32Array(mvp.toArray());
-			INV_MVP = new Float32Array(mvp.invert().toArray());
-
-
-			this.#webGPURenderer1.render(MVP);
-			this.#webGPUTexture1.needsUpdate = true;
-			this.#render();
+			this.mvp.copy(cameras[0].projectionMatrix).multiply(cameras[0].matrixWorldInverse).multiply(this.model);
+			this.mvp.toArray(this.cameraMVP.L);
+			this.mvp.copy(cameras[1].projectionMatrix).multiply(cameras[1].matrixWorldInverse).multiply(this.model);
+			this.mvp.toArray(this.cameraMVP.R);
 		}
+
+		this.webGPUStereoRenderer.render(this.cameraMVP.L, this.cameraMVP.R);
+		this.#webGPUStereoTexture.needsUpdate = true;
+
+		this.#render();
 		this.#stats.update();
-		// requestAnimationFrame(this.#animationLoop.bind(this))
 	}
 
 	#render() {
-		// console.log("render", this)
 		this.#renderer.render(this.#scene, this.#camera);
 	}
 
 	start() {
 		this.#renderer.setAnimationLoop(this.#animationLoop.bind(this));
-		// requestAnimationFrame(this.#animationLoop.bind(this))
 	}
 }
